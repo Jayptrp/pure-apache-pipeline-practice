@@ -1,0 +1,194 @@
+services:
+
+  # ---------------------------------------------------------------------------
+  # Stage 1: Apache Kafka (KRaft mode — no ZooKeeper)
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Stage 1: Kafka UI — visual topic browser (portfolio demo screenshots)
+  # ---------------------------------------------------------------------------
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8081:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    mem_limit: 256m
+
+  # ---------------------------------------------------------------------------
+  # Stage 1: POS Event Generator
+  # ---------------------------------------------------------------------------
+  generator:
+    image: python:3.12-slim
+    container_name: generator
+    working_dir: /app
+    volumes:
+      - ./generator:/app
+    command: >
+      bash -c "pip install -r requirements.txt -q &&
+               python pos_generator.py"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: raw_pos_transactions
+    depends_on:
+      kafka:
+        condition: service_healthy
+    mem_limit: 256m
+    restart: on-failure
+
+  # ---------------------------------------------------------------------------
+  # Stage 2+: Apache Spark (Structured Streaming)
+  # ---------------------------------------------------------------------------
+  spark:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    container_name: spark
+    volumes:
+      - ./spark/stream_processor.py:/opt/spark/work-dir/stream_processor.py
+      - ./spark/verify_iceberg.py:/opt/spark/work-dir/verify_iceberg.py
+      - ./warehouse:/opt/warehouse
+      - ./checkpoints:/opt/checkpoints
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: raw_pos_transactions
+      SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-2g}
+    command: ["python", "/opt/spark/work-dir/stream_processor.py"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    mem_limit: 3g
+
+  # ---------------------------------------------------------------------------
+  # Stage 4: PostgreSQL — Airflow metadata database
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-airflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
+      POSTGRES_DB: ${POSTGRES_DB:-airflow}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-airflow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Stage 4: Airflow — one-time DB init (runs once, then exits)
+  # ---------------------------------------------------------------------------
+  airflow-init:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: airflow-init
+    command: >
+      bash -c "airflow db migrate &&
+               airflow users create
+                 --username admin
+                 --password admin
+                 --firstname Admin
+                 --lastname User
+                 --role Admin
+                 --email admin@example.com"
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres/${POSTGRES_DB:-airflow}
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Stage 4: Airflow Webserver
+  # ---------------------------------------------------------------------------
+  airflow-webserver:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres/${POSTGRES_DB:-airflow}
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "pos_pipeline_secret_key_change_in_prod"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./warehouse:/opt/warehouse
+      - ./checkpoints:/opt/checkpoints
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    mem_limit: 1g
+
+  # ---------------------------------------------------------------------------
+  # Stage 4: Airflow Scheduler (LocalExecutor — no Celery/Redis/Flower)
+  # ---------------------------------------------------------------------------
+  airflow-scheduler:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: airflow-scheduler
+    command: scheduler
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres/${POSTGRES_DB:-airflow}
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "pos_pipeline_secret_key_change_in_prod"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./warehouse:/opt/warehouse
+      - ./checkpoints:/opt/checkpoints
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    mem_limit: 1g
+
+# Named volumes for stateful service data (not inspected from host)
+volumes:
+  kafka-data:
+  postgres-data:

@@ -1,0 +1,9 @@
+warehouse/
+checkpoints/
+kafka-data/
+postgres-data/
+.env
+__pycache__/
+*.pyc
+*.egg-info/
+.DS_Store
