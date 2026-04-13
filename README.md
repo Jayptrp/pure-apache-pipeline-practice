@@ -11,7 +11,7 @@ flowchart LR
     G["POS Generator\npython:3.12-slim\n5–10 TPS"]
     K["Apache Kafka 3.9.0\nKRaft mode\nraw_pos_transactions"]
     S["Apache Spark 4.0.2\nStructured Streaming\nlocal[2]"]
-    I["Apache Iceberg 1.8.x\nHadoop catalog\nParquet files"]
+    I["Apache Iceberg 1.10.1\nHadoop catalog\nParquet files"]
     A["Apache Airflow 3.2.0\nLocalExecutor\nDAG: pos_pipeline"]
     UI["Kafka UI\nlocalhost:8081"]
 
@@ -30,7 +30,7 @@ flowchart LR
 |---|---|---|
 | Apache Kafka | 3.9.0 (KRaft) | Event broker — no ZooKeeper |
 | Apache Spark | 4.0.2 / PySpark | Structured Streaming processor |
-| Apache Iceberg | 1.8.x | Lakehouse table format (ACID + time-travel) |
+| Apache Iceberg | 1.10.1 | Lakehouse table format (ACID + time-travel) |
 | Apache Parquet | via Spark | Columnar storage under Iceberg |
 | Apache Airflow | 3.2.0 | Workflow orchestration |
 | Docker Compose | v2+ | Reproducible local stack |
@@ -88,6 +88,7 @@ docker compose up
 |---|---|---|
 | Kafka UI | http://localhost:8081 | Topic browser, consumer lag |
 | Airflow UI | http://localhost:8080 | admin / admin |
+| Spark UI | http://localhost:4040 | Streaming query progress, DAG, batch timing |
 
 ---
 
@@ -115,7 +116,7 @@ WRITE_MODE=parquet docker compose up kafka generator spark
 docker compose up kafka generator spark  # WRITE_MODE=iceberg (default)
 
 # Run the verification script for SQL screenshots
-docker exec spark python /opt/spark/work-dir/verify_iceberg.py
+docker exec spark /opt/spark/bin/spark-submit /opt/spark/work-dir/verify_iceberg.py
 ```
 
 Expected output includes: row counts, revenue by store, snapshot history,
@@ -186,7 +187,7 @@ docker exec kafka /opt/kafka/bin/kafka-consumer-groups.sh \
 ls -lh warehouse/db/pos_transactions/data/
 
 # Run full Iceberg SQL demo
-docker exec spark python /opt/spark/work-dir/verify_iceberg.py
+docker exec spark /opt/spark/bin/spark-submit /opt/spark/work-dir/verify_iceberg.py
 
 # Trigger Airflow DAG via CLI
 docker exec airflow-scheduler airflow dags trigger pos_pipeline
