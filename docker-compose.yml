@@ -11,7 +11,7 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
@@ -35,7 +35,7 @@ services:
   # Stage 1: Kafka UI — visual topic browser (portfolio demo screenshots)
   # ---------------------------------------------------------------------------
   kafka-ui:
-    image: provectuslabs/kafka-ui:latest
+    image: ghcr.io/kafbat/kafka-ui:latest
     container_name: kafka-ui
     ports:
       - "8081:8080"
@@ -76,16 +76,24 @@ services:
       context: ./spark
       dockerfile: Dockerfile
     container_name: spark
+    user: "${CURRENT_UID}:${CURRENT_GID}"
     volumes:
       - ./spark/stream_processor.py:/opt/spark/work-dir/stream_processor.py
       - ./spark/verify_iceberg.py:/opt/spark/work-dir/verify_iceberg.py
       - ./warehouse:/opt/warehouse
       - ./checkpoints:/opt/checkpoints
+      - /etc/passwd:/etc/passwd:ro
+      - /etc/group:/etc/group:ro
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_TOPIC: raw_pos_transactions
       SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-2g}
-    command: ["python", "/opt/spark/work-dir/stream_processor.py"]
+      WRITE_MODE: ${WRITE_MODE:-iceberg}
+      HOME: /tmp
+      JAVA_TOOL_OPTIONS: "-Duser.home=/tmp"
+    ports:
+      - "4040:4040"
+    command: ["/opt/spark/bin/spark-submit", "/opt/spark/work-dir/stream_processor.py"]
     depends_on:
       kafka:
         condition: service_healthy
@@ -118,19 +126,14 @@ services:
       context: ./airflow
       dockerfile: Dockerfile
     container_name: airflow-init
-    command: >
+    command: >-
       bash -c "airflow db migrate &&
-               airflow users create
-                 --username admin
-                 --password admin
-                 --firstname Admin
-                 --lastname User
-                 --role Admin
-                 --email admin@example.com"
+               airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com"
     environment:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres/${POSTGRES_DB:-airflow}
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
     depends_on:
       postgres:
         condition: service_healthy
@@ -144,14 +147,15 @@ services:
       context: ./airflow
       dockerfile: Dockerfile
     container_name: airflow-webserver
-    command: webserver
+    command: api-server
     ports:
       - "8080:8080"
     environment:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres/${POSTGRES_DB:-airflow}
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
-      AIRFLOW__WEBSERVER__SECRET_KEY: "pos_pipeline_secret_key_change_in_prod"
+      AIRFLOW__API__SECRET_KEY: "pos_pipeline_secret_key_change_in_prod"
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./warehouse:/opt/warehouse
@@ -176,7 +180,8 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres/${POSTGRES_DB:-airflow}
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
-      AIRFLOW__WEBSERVER__SECRET_KEY: "pos_pipeline_secret_key_change_in_prod"
+      AIRFLOW__API__SECRET_KEY: "pos_pipeline_secret_key_change_in_prod"
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./warehouse:/opt/warehouse

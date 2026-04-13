@@ -19,15 +19,22 @@ USER root
 ARG MAVEN=https://repo1.maven.org/maven2
 
 # Kafka connector JARs (Stage 2)
+# spark-sql-kafka-0-10        — Kafka source/sink
+# spark-token-provider-kafka-0-10 — required companion (KafkaConfigUpdater lives here)
+# kafka-clients               — transitive dep
+# commons-pool2               — transitive dep
 RUN wget -q "${MAVEN}/org/apache/spark/spark-sql-kafka-0-10_2.13/4.0.2/spark-sql-kafka-0-10_2.13-4.0.2.jar" \
          -O "${SPARK_HOME}/jars/spark-sql-kafka-0-10_2.13-4.0.2.jar" && \
+    wget -q "${MAVEN}/org/apache/spark/spark-token-provider-kafka-0-10_2.13/4.0.2/spark-token-provider-kafka-0-10_2.13-4.0.2.jar" \
+         -O "${SPARK_HOME}/jars/spark-token-provider-kafka-0-10_2.13-4.0.2.jar" && \
     wget -q "${MAVEN}/org/apache/kafka/kafka-clients/3.9.0/kafka-clients-3.9.0.jar" \
          -O "${SPARK_HOME}/jars/kafka-clients-3.9.0.jar" && \
     wget -q "${MAVEN}/org/apache/commons/commons-pool2/2.12.0/commons-pool2-2.12.0.jar" \
          -O "${SPARK_HOME}/jars/commons-pool2-2.12.0.jar"
 
 # Iceberg runtime JAR (Stage 3)
-RUN wget -q "${MAVEN}/org/apache/iceberg/iceberg-spark-runtime-4.0_2.13/1.8.1/iceberg-spark-runtime-4.0_2.13-1.8.1.jar" \
-         -O "${SPARK_HOME}/jars/iceberg-spark-runtime-4.0_2.13-1.8.1.jar"
+# iceberg-spark-runtime-4.0_2.13 first appeared in Iceberg 1.10.0
+RUN wget -q "${MAVEN}/org/apache/iceberg/iceberg-spark-runtime-4.0_2.13/1.10.1/iceberg-spark-runtime-4.0_2.13-1.10.1.jar" \
+         -O "${SPARK_HOME}/jars/iceberg-spark-runtime-4.0_2.13-1.10.1.jar"
 
 USER spark
